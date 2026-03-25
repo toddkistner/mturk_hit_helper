@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MTurk HIT Helper Stable</title>
+  <style>
+    body { width: 380px; margin: 0; padding: 14px; font: 13px/1.4 Arial, sans-serif; background: #f9fafb; color: #111827; }
+    h1 { margin: 0 0 10px 0; font-size: 16px; }
+    .section { margin-top: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { display: block; font-size: 12px; color: #374151; margin-bottom: 4px; }
+    input, select, textarea, button { width: 100%; box-sizing: border-box; font: inherit; }
+    input, select, textarea { padding: 7px 8px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; }
+    textarea { min-height: 64px; resize: vertical; }
+    select[multiple] { min-height: 110px; }
+    .checkbox { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+    .checkbox input { width: auto; }
+    .checkbox label { margin: 0; }
+    .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+    .btn { padding: 9px 10px; border: 0; border-radius: 9px; background: #111827; color: #fff; cursor: pointer; }
+    .btn.secondary { background: #374151; width: 42px; }
+    .hint { margin-top: 4px; font-size: 11px; color: #6b7280; }
+    .footer { margin-top: 12px; font-size: 11px; color: #4b5563; }
+    code { background: #e5e7eb; padding: 1px 4px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>MTurk HIT Helper Stable</h1>
+
+  <div class="section">
+    <div class="checkbox"><input id="enabled" type="checkbox"><label for="enabled">Extension enabled</label></div>
+    <div class="checkbox"><input id="refreshEnabled" type="checkbox"><label for="refreshEnabled">Auto-refresh via visible refresh control</label></div>
+    <div class="checkbox"><input id="audioEnabled" type="checkbox"><label for="audioEnabled">Audio alerts</label></div>
+    <div class="checkbox"><input id="debugMode" type="checkbox"><label for="debugMode">Debug overlay mode</label></div>
+  </div>
+
+  <div class="section grid">
+    <div>
+      <label for="mode">Sort mode</label>
+      <select id="mode">
+        <option value="best">Best</option>
+        <option value="acceptance">Max acceptance</option>
+        <option value="reward">Max reward</option>
+      </select>
+    </div>
+    <div>
+      <label for="minReward">Min reward ($)</label>
+      <input id="minReward" type="number" min="0" step="0.01">
+    </div>
+    <div>
+      <label for="minApprovalRate">Min approval rate (%)</label>
+      <input id="minApprovalRate" type="number" min="0" max="100" step="1">
+    </div>
+    <div>
+      <label for="refreshMinSeconds">Refresh min (sec)</label>
+      <input id="refreshMinSeconds" type="number" min="5" max="60" step="1">
+    </div>
+    <div>
+      <label for="refreshMaxSeconds">Refresh max (sec)</label>
+      <input id="refreshMaxSeconds" type="number" min="5" max="60" step="1">
+    </div>
+    <div>
+      <label for="maxAge">Hide HITs older than</label>
+      <input id="maxAge" type="text" placeholder='e.g. 1d 1h or 3d 4h 4m 10s'>
+    </div>
+  </div>
+
+  <div class="section">
+    <label for="blockedRequesters">Blocked requesters</label>
+    <textarea id="blockedRequesters" placeholder="One per line: requesterId|reason"></textarea>
+  </div>
+
+  <div class="section">
+    <div class="row">
+      <div>
+        <label for="hiddenHitPatterns">Hidden opportunities</label>
+        <select id="hiddenHitPatterns" multiple></select>
+      </div>
+      <button id="removeHidden" class="btn secondary" title="Remove selected hidden entries">−</button>
+    </div>
+    <div class="hint">These stay out of the table entirely.</div>
+  </div>
+
+  <div class="section">
+    <label for="requesterNotes">Requester notes</label>
+    <textarea id="requesterNotes" placeholder="One per line: requesterKey|score|speed|note"></textarea>
+  </div>
+
+  <div class="section">
+    <div class="row">
+      <div>
+        <label for="excludedOpportunities">Excluded opportunities</label>
+        <select id="excludedOpportunities" multiple></select>
+      </div>
+      <button id="removeExcluded" class="btn secondary" title="Remove selected excluded entries">−</button>
+    </div>
+    <div class="hint">These remain visible, but never become the top highlighted HIT.</div>
+  </div>
+
+  <div class="section row">
+    <button id="dumpMapping" class="btn">Dump mapping</button>
+    <button id="rerankNow" class="btn">Rerank now</button>
+  </div>
+
+  <button id="save" class="btn">Save</button>
+
+  <div class="footer">
+    Keys on the MTurk page: <code>Z</code> accept top HIT, <code>B</code> block top requester, <code>H</code> hide top title, <code>X</code> exclude top opportunity without hiding it, <code>R</code> rerank.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

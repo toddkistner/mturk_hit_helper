@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "MTurk HIT Helper Stable",
+  "version": "0.3.35",
+  "description": "Highlights the best visible MTurk HIT and accepts it with Z.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://worker.mturk.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://worker.mturk.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
