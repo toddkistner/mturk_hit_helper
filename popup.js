@@ -101,11 +101,15 @@ function saveSettings(payload) {
   setValue("refreshMinSeconds", settings.refreshMinSeconds ?? 8);
   setValue("refreshMaxSeconds", settings.refreshMaxSeconds ?? 12);
   setValue("maxAge", settings.maxAge || "");
-  setValue("blockedRequesters", stringifyBlocked(settings.blockedRequesters || {}));
+  setValue("minVisibleHitCount", settings.minVisibleHitCount ?? 2);
+  setValue("ghostSuppressAfterSeen", settings.ghostSuppressAfterSeen ?? 2);
+  setValue("ghostSuppressMinutes", settings.ghostSuppressMinutes ?? 10);
+  fillMultiSelect("blockedRequesters", Object.entries(settings.blockedRequesters || {}).map(([k, v]) => `${k}|${v}`));
   setValue("requesterNotes", stringifyNotes(settings.requesterNotes || {}));
   fillMultiSelect("hiddenHitPatterns", settings.hiddenHitPatterns || []);
   fillMultiSelect("excludedOpportunities", settings.excludedOpportunities || []);
 
+  document.getElementById("removeBlocked").addEventListener("click", () => removeSelected("blockedRequesters"));
   document.getElementById("removeHidden").addEventListener("click", () => removeSelected("hiddenHitPatterns"));
   document.getElementById("removeExcluded").addEventListener("click", () => removeSelected("excludedOpportunities"));
 
@@ -129,7 +133,10 @@ function saveSettings(payload) {
       refreshMinSeconds: Math.max(5, Number(getValue("refreshMinSeconds")) || 8),
       refreshMaxSeconds: Math.max(5, Number(getValue("refreshMaxSeconds")) || 12),
       maxAge: String(getValue("maxAge") || "").trim(),
-      blockedRequesters: parseBlocked(getValue("blockedRequesters")),
+      minVisibleHitCount: Math.max(0, Number(getValue("minVisibleHitCount")) || 0),
+      ghostSuppressAfterSeen: Math.max(1, Number(getValue("ghostSuppressAfterSeen")) || 2),
+      ghostSuppressMinutes: Math.max(1, Number(getValue("ghostSuppressMinutes")) || 10),
+      blockedRequesters: parseBlocked(getMultiValues("blockedRequesters").join("\n")),
       hiddenHitPatterns: getMultiValues("hiddenHitPatterns"),
       requesterNotes: parseNotes(getValue("requesterNotes")),
       excludedOpportunities: getMultiValues("excludedOpportunities")

@@ -1,4 +1,4 @@
-# MTurk HIT Helper Stable v0.3.35
+# MTurk HIT Helper Stable v0.3.38
 
 This build reads MTurk's React data directly from the HitSetTable `data-react-props` payload instead of relying on fragile button discovery in the rendered DOM.
 
@@ -75,3 +75,17 @@ This build reads MTurk's React data directly from the HitSetTable `data-react-pr
 - Switched from table/source assumptions to live DOM hydration matching under MainContent
 - Visible hydrated nodes are now scored against React bodyData by requester/title/reward text and best-match assigned
 - Pills/highlights attach only to matched hydrated nodes from the live rendered UI
+
+
+## Changes in 0.3.37
+
+- Added low-count ghost suppression keyed by HIT group ID and persisted across reloads in the same tab
+- Added configurable minimum visible HIT count so groups under the threshold are hidden outright
+- Added repeated low-count suppression so sticky 1-HIT ghost groups are hidden for a configurable number of minutes
+
+## Changes in 0.3.38
+
+- Made the reload countdown pill clickable so it can toggle auto-refresh on and off without opening the popup
+- Made the on-page audio alert button persist its enabled state across refreshes and reflect that saved preference
+- Changed Blocked requesters in the popup to a removable multiselect list like Hidden opportunities
+

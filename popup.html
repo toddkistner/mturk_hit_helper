@@ -63,11 +63,28 @@
       <label for="maxAge">Hide HITs older than</label>
       <input id="maxAge" type="text" placeholder='e.g. 1d 1h or 3d 4h 4m 10s'>
     </div>
+    <div>
+      <label for="minVisibleHitCount">Hide HIT groups below count</label>
+      <input id="minVisibleHitCount" type="number" min="0" max="99999" step="1">
+    </div>
+    <div>
+      <label for="ghostSuppressAfterSeen">Suppress low-count group after seen this many scans</label>
+      <input id="ghostSuppressAfterSeen" type="number" min="1" max="50" step="1">
+    </div>
+    <div>
+      <label for="ghostSuppressMinutes">Suppress low-count group for minutes</label>
+      <input id="ghostSuppressMinutes" type="number" min="1" max="1440" step="1">
+    </div>
   </div>
 
   <div class="section">
-    <label for="blockedRequesters">Blocked requesters</label>
-    <textarea id="blockedRequesters" placeholder="One per line: requesterId|reason"></textarea>
+    <div class="row">
+      <div>
+        <label for="blockedRequesters">Blocked requesters</label>
+        <select id="blockedRequesters" multiple></select>
+      </div>
+      <button id="removeBlocked" class="btn secondary" title="Remove selected blocked requesters">−</button>
+    </div>
   </div>
 
   <div class="section">

@@ -144,7 +144,13 @@
         box-shadow: 0 8px 24px rgba(0,0,0,.25);
       }
       #mhh-status { top: 16px; background: #1f2937; pointer-events: none; }
-      #mhh-refresh-countdown { top: 62px; background: #374151; pointer-events: none; }
+      #mhh-refresh-countdown {
+        top: 62px;
+        background: #374151;
+        pointer-events: auto;
+        cursor: pointer;
+        user-select: none;
+      }
       #mhh-alert {
         bottom: 16px;
         background: #111827;
@@ -193,44 +199,80 @@
     setTimeout(() => el.classList.remove("show"), 1800);
   }
 
+  function refreshCountdownText() {
+    if (!STATE.settings?.refreshEnabled) {
+      return "⏸ Reload paused • click to enable";
+    }
+    if (!STATE.nextRefreshAt) {
+      return "⏳ Reload enabled • scheduling...";
+    }
+    const remaining = Math.max(0, Math.ceil((STATE.nextRefreshAt - Date.now()) / 1000));
+    return "⏳ Next reload in " + remaining + "s • click to pause";
+  }
+
   function showCountdown(message) {
-    ensureBox(IDS.countdown).textContent = message;
+    const el = ensureBox(IDS.countdown);
+    el.textContent = message;
+    el.title = STATE.settings?.refreshEnabled ? "Click to pause auto-refresh" : "Click to enable auto-refresh";
   }
 
   function stopCountdown() {
     if (STATE.countdownTimer) clearInterval(STATE.countdownTimer);
+    if (STATE.refreshTimer) clearTimeout(STATE.refreshTimer);
     STATE.countdownTimer = null;
+    STATE.refreshTimer = null;
     STATE.nextRefreshAt = null;
-    showCountdown("⏸ Reload paused");
+    showCountdown(refreshCountdownText());
   }
 
   function startCountdown() {
     if (STATE.countdownTimer) clearInterval(STATE.countdownTimer);
+    showCountdown(refreshCountdownText());
     STATE.countdownTimer = setInterval(() => {
-      if (!STATE.settings?.refreshEnabled || !STATE.nextRefreshAt) {
-        showCountdown("⏸ Reload paused");
-        return;
-      }
-      const remaining = Math.max(0, Math.ceil((STATE.nextRefreshAt - Date.now()) / 1000));
-      showCountdown("⏳ Next reload in " + remaining + "s");
+      showCountdown(refreshCountdownText());
     }, 250);
   }
 
+  function updateAudioButtonLabel(button) {
+    const btn = button || ensureBox(IDS.arm, "button");
+    if (!STATE.settings?.audioEnabled) {
+      btn.textContent = "Enable audio alerts";
+    } else if (STATE.audioArmed) {
+      btn.textContent = "Audio alerts enabled";
+    } else {
+      btn.textContent = "Audio alerts on • click to arm";
+    }
+    return btn;
+  }
+
   function armAudioButton() {
-    const btn = ensureBox(IDS.arm, "button");
-    btn.textContent = STATE.audioArmed ? "Audio alerts enabled" : "Enable audio alerts";
+    const btn = updateAudioButtonLabel(ensureBox(IDS.arm, "button"));
     btn.onclick = async () => {
+      const enableAlerts = !STATE.settings?.audioEnabled;
+      if (enableAlerts) {
+        STATE.settings = { ...STATE.settings, audioEnabled: true };
+        updateAudioButtonLabel(btn);
+        patchSettings({ audioEnabled: true }, () => updateAudioButtonLabel(btn));
+      }
+
       try {
         if (!STATE.audioContext) STATE.audioContext = new AudioContext();
         if (STATE.audioContext.state === "suspended") await STATE.audioContext.resume();
         STATE.audioArmed = true;
-        btn.textContent = "Audio alerts enabled";
+        updateAudioButtonLabel(btn);
         beep();
       } catch (err) {
         log("Audio arm failed", err);
         btn.textContent = "Audio enable failed";
       }
     };
+  }
+
+  function toggleRefreshEnabled() {
+    patchSettings({ refreshEnabled: !STATE.settings?.refreshEnabled }, () => {
+      if (STATE.settings?.refreshEnabled) scheduleRefresh();
+      else stopCountdown();
+    });
   }
 
   function beep() {
@@ -365,6 +407,107 @@
   function requesterIdFromUrl(url) {
     const m = String(url || "").match(/\/requesters\/([^/]+)\//);
     return m ? m[1] : "";
+  }
+
+
+  const GHOST_STORAGE_KEY = "mhhGhostStateV1";
+
+  function loadGhostState() {
+    try {
+      return JSON.parse(sessionStorage.getItem(GHOST_STORAGE_KEY) || "{}");
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function saveGhostState(state) {
+    try {
+      sessionStorage.setItem(GHOST_STORAGE_KEY, JSON.stringify(state || {}));
+    } catch (err) {}
+  }
+
+  function pruneGhostState(state) {
+    const next = {};
+    const now = Date.now();
+    for (const [key, value] of Object.entries(state || {})) {
+      if (!value || typeof value !== "object") continue;
+      if (value.suppressUntil && value.suppressUntil <= now && (!value.lowSeenCount || value.lowSeenCount <= 0)) continue;
+      if (value.lastSeenAt && (now - value.lastSeenAt) > 86400000 && (!value.suppressUntil || value.suppressUntil <= now)) continue;
+      next[key] = value;
+    }
+    return next;
+  }
+
+  function extractHitCount(raw, row) {
+    const rawCandidates = [
+      raw && raw.assignable_hits_count,
+      raw && raw.available_hits_count,
+      raw && raw.project_available_hits_count,
+      raw && raw.hit_count,
+      raw && raw.hits_count,
+      raw && raw.number_of_hits
+    ];
+
+    for (const candidate of rawCandidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n)) return n;
+    }
+
+    if (row) {
+      const cells = rowCells(row);
+      const countCell = cells[2] || null;
+      const countText = textOf(countCell || "");
+      const match = countText.replace(/,/g, "").match(/\b\d+\b/);
+      if (match) return Number(match[0]);
+    }
+
+    return null;
+  }
+
+  function applyGhostSuppression(item) {
+    const key = String(item.hitSetId || item.id || "").trim();
+    if (!key) {
+      return { ...item, lowCountGhostSuppressed: false };
+    }
+
+    const minVisibleHitCount = Math.max(0, Number(STATE.settings.minVisibleHitCount || 0));
+    const ghostHitCountThreshold = Math.max(0, Number(STATE.settings.ghostHitCountThreshold || 1));
+    const ghostSuppressAfterSeen = Math.max(1, Number(STATE.settings.ghostSuppressAfterSeen || 2));
+    const ghostSuppressMinutes = Math.max(1, Number(STATE.settings.ghostSuppressMinutes || 10));
+    const now = Date.now();
+
+    const store = pruneGhostState(loadGhostState());
+    const entry = { ...(store[key] || {}) };
+    const hitCount = Number.isFinite(item.hitCount) ? item.hitCount : null;
+    const isLowCount = hitCount != null && hitCount <= ghostHitCountThreshold;
+
+    entry.lastSeenAt = now;
+    if (hitCount != null) entry.lastHitCount = hitCount;
+
+    if (isLowCount) {
+      entry.lowSeenCount = Number(entry.lowSeenCount || 0) + 1;
+      if (entry.lowSeenCount >= ghostSuppressAfterSeen) {
+        entry.suppressUntil = now + ghostSuppressMinutes * 60000;
+      }
+    } else if (hitCount != null && hitCount >= minVisibleHitCount) {
+      entry.lowSeenCount = 0;
+      entry.suppressUntil = 0;
+    }
+
+    store[key] = entry;
+    saveGhostState(store);
+
+    const lowCountFiltered = hitCount != null && hitCount < minVisibleHitCount;
+    const lowCountGhostSuppressed = !!(entry.suppressUntil && entry.suppressUntil > now);
+
+    return {
+      ...item,
+      lowCountFiltered,
+      lowCountGhostSuppressed,
+      ghostLowSeenCount: Number(entry.lowSeenCount || 0),
+      filteredOut: item.filteredOut || lowCountFiltered || lowCountGhostSuppressed,
+      hidden: item.hidden || lowCountFiltered || lowCountGhostSuppressed
+    };
   }
 
   function hiddenByPattern(title) {
@@ -533,7 +676,7 @@
     if (item.manuallyExcluded || item.filteredOut || isTop) {
       const pill = document.createElement("span");
       pill.className = "mhh-pill";
-      pill.textContent = item.manuallyExcluded ? "Excluded from top" : (item.filteredOut ? "Below requirements" : ("Score " + item.score));
+      pill.textContent = item.manuallyExcluded ? "Excluded from top" : (item.lowCountGhostSuppressed ? "Ghost-suppressed" : (item.lowCountFiltered ? "Low HIT count" : (item.filteredOut ? "Below requirements" : ("Score " + item.score))));
       host.appendChild(pill);
     }
 
@@ -610,13 +753,14 @@
       }
 
       const control = acceptControlFromRow(bestRow);
-      const scored = scoreItem({
+      const scoredBase = scoreItem({
         id: normalize([(raw.requester_name || ""), (raw.title || ""), String(raw.monetary_reward?.amount_in_dollars || 0)].join("|")),
         hitSetId: raw.hit_set_id,
         requesterId: raw.requester_id || requesterIdFromUrl(raw.requester_url),
         requester: raw.requester_name || "",
         title: raw.title || "",
         reward: Number(raw.monetary_reward?.amount_in_dollars || 0),
+        hitCount: extractHitCount(raw, bestRow),
         approvalRate: approvalRateForItem(raw),
         creationTime: raw.creation_time || "",
         row: bestRow,
@@ -624,6 +768,7 @@
         acceptUrl: raw.accept_project_task_url || "",
         debugIndex: i
       });
+      const scored = applyGhostSuppression(scoredBase);
       items.push(scored);
 
       const anchor = findBestAnchor(bestRow, scored.title);
@@ -638,6 +783,10 @@
         manuallyExcluded: scored.manuallyExcluded,
         hasRow: !!bestRow,
         hasControl: !!control,
+        hitCount: scored.hitCount,
+        ghostLowSeenCount: scored.ghostLowSeenCount,
+        lowCountFiltered: scored.lowCountFiltered,
+        lowCountGhostSuppressed: scored.lowCountGhostSuppressed,
         anchorTag: info.anchorTag,
         anchorText: info.anchorText
       });
@@ -737,6 +886,8 @@
   function patchSettings(patch, callback) {
     chrome.runtime.sendMessage({ type: "PATCH_SETTINGS", payload: patch }, (response) => {
       STATE.settings = (response && response.settings) ? response.settings : { ...STATE.settings, ...patch };
+      showCountdown(refreshCountdownText());
+      updateAudioButtonLabel();
       if (callback) callback();
     });
   }
@@ -854,7 +1005,9 @@
     STATE.settings = await loadSettings();
     ensureBox(IDS.status);
     ensureBox(IDS.alert);
-    ensureBox(IDS.countdown);
+    const countdown = ensureBox(IDS.countdown);
+    countdown.onclick = toggleRefreshEnabled;
+    showCountdown(refreshCountdownText());
     armAudioButton();
     window.addEventListener("keydown", keyHandler, true);
     rerank();
