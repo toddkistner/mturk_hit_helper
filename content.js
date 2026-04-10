@@ -10,7 +10,13 @@
     lastAlertId: null,
     nextRefreshAt: null,
     countdownTimer: null,
-    debugRows: []
+    debugRows: [],
+    watchRefreshId: 0,
+    watchSnapshotSignature: "",
+    rerankInFlight: false,
+    rerankQueued: false,
+    mutationObserver: null,
+    mutationRerankTimer: null
   };
 
   const IDS = {
@@ -18,7 +24,9 @@
     status: "mhh-status",
     alert: "mhh-alert",
     arm: "mhh-audio-arm",
-    countdown: "mhh-refresh-countdown"
+    countdown: "mhh-refresh-countdown",
+    toolbar: "mhh-toolbar",
+    hideToggle: "mhh-hide-toggle"
   };
 
   function log(...args) {
@@ -79,6 +87,10 @@
     return String(value || "").trim().toLowerCase();
   }
 
+  function normalizeLoose(value) {
+    return normalize(value).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+
   function parseApprovalRate(value) {
     const match = String(value || "").match(/([0-9]{1,3}(?:\.[0-9]+)?)\s*%/);
     return match ? parseFloat(match[1]) : null;
@@ -101,6 +113,31 @@
       else if (unit === "s") total += n;
     }
     return matched ? total : null;
+  }
+
+  function parseAgeText(value) {
+    const text = normalize(String(value || "").replace(/\bago\b/g, "").trim());
+    if (!text) return null;
+    return parseDuration(text);
+  }
+
+  function parseCreatedTimingInfo(value) {
+    const rawText = String(value || "").trim();
+    const text = normalize(rawText);
+    if (!text) {
+      return { direction: "unknown", seconds: null, text: rawText };
+    }
+
+    const seconds = parseDuration(text.replace(/\bago\b/g, "").replace(/\bin\b/g, "").trim());
+    let direction = "unknown";
+    if (/\bin\b/.test(text)) direction = "future";
+    else if (/\bago\b/.test(text)) direction = "past";
+
+    return {
+      direction,
+      seconds: seconds != null ? seconds : null,
+      text: rawText
+    };
   }
 
   function ensureStyle() {
@@ -133,62 +170,136 @@
         color: #fff !important;
         background: #1d4ed8 !important;
       }
-      #mhh-status, #mhh-alert, #mhh-refresh-countdown {
+      #mhh-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        margin: 12px auto 14px auto;
+        text-align: center;
+      }
+      #mhh-status, #mhh-refresh-countdown, #mhh-audio-arm, #mhh-hide-toggle {
+        position: static !important;
+        z-index: auto !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-height: 40px !important;
+        max-width: min(100%, 420px) !important;
+        font: 13px/1.3 Arial, sans-serif !important;
+        color: #fff !important;
+        border-radius: 10px !important;
+        padding: 10px 14px !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,.18) !important;
+        white-space: nowrap !important;
+      }
+      #mhh-status {
+        background: #1f2937 !important;
+        pointer-events: none !important;
+      }
+      #mhh-refresh-countdown {
+        background: #374151 !important;
+        pointer-events: auto !important;
+        cursor: pointer !important;
+        user-select: none !important;
+      }
+      #mhh-audio-arm {
+        background: #2563eb !important;
+        border: 0 !important;
+        cursor: pointer !important;
+      }
+      #mhh-hide-toggle {
+        background: #7c3aed !important;
+        border: 0 !important;
+        cursor: pointer !important;
+      }
+      #mhh-alert {
         position: fixed;
         right: 16px;
+        bottom: 16px;
         z-index: 2147483647;
         font: 13px/1.4 Arial, sans-serif;
         color: #fff;
+        background: #111827;
         border-radius: 10px;
         padding: 10px 14px;
         box-shadow: 0 8px 24px rgba(0,0,0,.25);
-      }
-      #mhh-status { top: 16px; background: #1f2937; pointer-events: none; }
-      #mhh-refresh-countdown {
-        top: 62px;
-        background: #374151;
-        pointer-events: auto;
-        cursor: pointer;
-        user-select: none;
-      }
-      #mhh-alert {
-        bottom: 16px;
-        background: #111827;
         opacity: 0;
         transform: translateY(12px);
         transition: all .16s ease;
         pointer-events: none;
       }
       #mhh-alert.show { opacity: 1; transform: translateY(0); }
-      #mhh-audio-arm {
-        position: fixed;
-        right: 16px;
-        top: 108px;
-        z-index: 2147483647;
-        font: 13px/1.2 Arial, sans-serif;
-        color: #fff;
-        background: #2563eb;
-        border: 0;
-        border-radius: 10px;
-        padding: 10px 14px;
-        box-shadow: 0 8px 24px rgba(0,0,0,.25);
-        cursor: pointer;
-      }
     `;
     document.head.appendChild(style);
   }
 
-  function ensureBox(id, tagName = "div") {
-    let el = document.getElementById(id);
+  
+  function toolbarMountParent() {
+    const root = getHitSetTableRoot();
+    if (!root) {
+      return document.body;
+    }
+    return root.parentElement || getHitSetTableContainer() || document.body;
+  }
+
+  function ensureToolbar() {
+    let el = document.getElementById(IDS.toolbar);
+    const parent = toolbarMountParent();
     if (!el) {
-      el = document.createElement(tagName);
-      el.id = id;
-      document.body.appendChild(el);
+      el = document.createElement("div");
+      el.id = IDS.toolbar;
+    }
+    if (parent && el.parentElement !== parent) {
+      const root = getHitSetTableRoot();
+      if (root) {
+        if (root.parentElement === parent) {
+          parent.insertBefore(el, root);
+        } else {
+          parent.prepend(el);
+        }
+      } else {
+        parent.prepend(el);
+      }
     }
     return el;
   }
 
-  function showStatus(message) {
+  function revealHiddenRowsEnabled() {
+    return !!STATE.settings?.revealHiddenRows;
+  }
+
+  function shouldHideRow(item) {
+    return !revealHiddenRowsEnabled() && !!(item.hidden || item.blocked);
+  }
+
+function ensureBox(id, tagName = "div") {
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement(tagName);
+      el.id = id;
+    }
+    const host = id === IDS.alert ? document.body : ensureToolbar();
+    if (el.parentElement !== host) {
+      host.appendChild(el);
+    }
+    return el;
+  }
+
+  
+  function updateHideToggleLabel(button) {
+    const btn = button || ensureBox(IDS.hideToggle, "button");
+    btn.textContent = revealHiddenRowsEnabled() ? "Showing hidden rows • click to rehide" : "Hidden rows off • click to show";
+    return btn;
+  }
+
+  function toggleRevealHiddenRows() {
+    patchSettings({ revealHiddenRows: !STATE.settings?.revealHiddenRows }, rerank);
+  }
+
+function showStatus(message) {
     ensureBox(IDS.status).textContent = message;
   }
 
@@ -369,17 +480,23 @@
     if (!(row instanceof HTMLElement) || !raw) return -1;
 
     const rowText = normalize(textOf(row));
+    const rowTextLoose = normalizeLoose(textOf(row));
     if (!rowText) return -1;
 
     let score = 0;
     const requester = normalize(raw.requester_name || "");
     const title = normalize(raw.title || "");
+    const titleLoose = normalizeLoose(raw.title || "");
     const reward = Number(raw.monetary_reward?.amount_in_dollars || 0);
     const rewardText = reward ? reward.toFixed(2) : "0.00";
     const rewardAlt = String(reward || 0);
 
     if (requester && rowText.includes(requester)) score += 4;
-    if (title && rowText.includes(title)) score += 5;
+    if (title && rowText.includes(title)) {
+      score += 5;
+    } else if (titleLoose && rowTextLoose.includes(titleLoose)) {
+      score += 5;
+    }
     if (reward && (rowText.includes(`$${rewardText}`) || rowText.includes(rewardText) || rowText.includes(rewardAlt))) score += 2;
 
     const requesterId = normalize(raw.requester_id || requesterIdFromUrl(raw.requester_url));
@@ -411,6 +528,7 @@
 
 
   const GHOST_STORAGE_KEY = "mhhGhostStateV1";
+  const WATCH_STORAGE_KEY = "mhhWatchStateV1";
 
   function loadGhostState() {
     try {
@@ -424,6 +542,232 @@
     try {
       sessionStorage.setItem(GHOST_STORAGE_KEY, JSON.stringify(state || {}));
     } catch (err) {}
+  }
+
+  function loadWatchState() {
+    try {
+      return JSON.parse(sessionStorage.getItem(WATCH_STORAGE_KEY) || "{}");
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function saveWatchState(state) {
+    try {
+      sessionStorage.setItem(WATCH_STORAGE_KEY, JSON.stringify(state || {}));
+    } catch (err) {}
+  }
+
+  function listWatchEntries() {
+    const store = pruneWatchState(loadWatchState());
+    saveWatchState(store);
+    return Object.entries(store).map(([key, value]) => ({
+      key,
+      requester: value && value.requester ? value.requester : "",
+      title: value && value.title ? value.title : "",
+      watchedAt: value && value.watchedAt ? value.watchedAt : 0,
+      until: value && value.until ? value.until : 0,
+      baselineAgeSeconds: value && Number.isFinite(Number(value.baselineAgeSeconds)) ? Number(value.baselineAgeSeconds) : null,
+      baselineCreationTime: value && value.baselineCreationTime ? value.baselineCreationTime : "",
+      baselineCreatedDirection: value && value.baselineCreatedDirection ? value.baselineCreatedDirection : "unknown",
+      baselineCreatedDisplayText: value && value.baselineCreatedDisplayText ? value.baselineCreatedDisplayText : ""
+    })).sort((a, b) => String(a.title || a.key).localeCompare(String(b.title || b.key)));
+  }
+
+  function removeWatchItems(keys) {
+    const store = pruneWatchState(loadWatchState());
+    let changed = false;
+    for (const key of (keys || [])) {
+      const normalizedKey = String(key || "").trim();
+      if (normalizedKey && Object.prototype.hasOwnProperty.call(store, normalizedKey)) {
+        delete store[normalizedKey];
+        changed = true;
+      }
+    }
+    if (changed) saveWatchState(store);
+    return { ok: true, removed: changed, entries: listWatchEntries() };
+  }
+
+  function pruneWatchState(state) {
+    const next = {};
+    const now = Date.now();
+    for (const [key, value] of Object.entries(state || {})) {
+      if (!value || typeof value !== "object") continue;
+      if (value.until && value.until <= now) continue;
+      next[key] = value;
+    }
+    return next;
+  }
+
+  function watchKeyForItem(item) {
+    return String(item.hitSetId || item.id || "").trim();
+  }
+
+  function getStableItemKey(item) {
+    const key = watchKeyForItem(item);
+    if (key) return key.replace(/"/g, "");
+    return normalize([(item && item.requester) || "", (item && item.title) || "", String(item && item.reward || "")].join("|"));
+  }
+
+  function currentAgeSecondsForItem(item) {
+    if (Number.isFinite(item.createdAgeSeconds)) return item.createdAgeSeconds;
+    if (item.creationTime) {
+      const createdMs = Date.parse(item.creationTime);
+      if (!Number.isNaN(createdMs)) {
+        return Math.max(0, (Date.now() - createdMs) / 1000);
+      }
+    }
+    return null;
+  }
+
+  function createdDirectionForItem(item) {
+    const direction = String(item && item.createdDirection ? item.createdDirection : "").trim().toLowerCase();
+    if (direction === "future" || direction === "past") return direction;
+    if (item && item.creationTime) return "past";
+    return "unknown";
+  }
+
+  function refreshToleranceSeconds(currentAgeSeconds) {
+    if (!Number.isFinite(currentAgeSeconds)) return 20;
+    if (currentAgeSeconds < 120) return 35;
+    if (currentAgeSeconds < 3600) return 90;
+    return 300;
+  }
+
+  function watchSnapshotSignatureForItems(items) {
+    return (items || []).map((item) => [
+      watchKeyForItem(item),
+      item.creationTime || "",
+      item.createdDirection || "",
+      item.createdDisplayText || "",
+      Number.isFinite(item.createdAgeSeconds) ? Math.round(item.createdAgeSeconds) : "",
+      Number.isFinite(item.hitCount) ? item.hitCount : ""
+    ].join("|")).join("||");
+  }
+
+  function currentWatchRefreshId(items) {
+    const signature = watchSnapshotSignatureForItems(items);
+    if (signature !== STATE.watchSnapshotSignature) {
+      STATE.watchSnapshotSignature = signature;
+      STATE.watchRefreshId = (STATE.watchRefreshId || 0) + 1;
+    }
+    return STATE.watchRefreshId || 0;
+  }
+
+  function addTopItemToWatchList() {
+    if (!STATE.topItem) return;
+    const key = watchKeyForItem(STATE.topItem);
+    if (!key) return;
+
+    const delaySeconds = parseDuration(STATE.settings.watchDelay);
+    if (!delaySeconds || delaySeconds <= 0) {
+      showAlert("Watch delay is not configured");
+      return;
+    }
+
+    const currentAgeSeconds = currentAgeSecondsForItem(STATE.topItem);
+    const currentDirection = createdDirectionForItem(STATE.topItem);
+    const store = pruneWatchState(loadWatchState());
+    const now = Date.now();
+    store[key] = {
+      watchedAt: now,
+      until: now + delaySeconds * 1000,
+      baselineAgeSeconds: Number.isFinite(currentAgeSeconds) ? currentAgeSeconds : null,
+      baselineCreationTime: STATE.topItem.creationTime || "",
+      baselineCreatedDirection: currentDirection,
+      baselineCreatedDisplayText: STATE.topItem.createdDisplayText || "",
+      lastSeenAt: now,
+      lastSeenAgeSeconds: Number.isFinite(currentAgeSeconds) ? currentAgeSeconds : null,
+      lastSeenCreationTime: STATE.topItem.creationTime || "",
+      lastSeenCreatedDirection: currentDirection,
+      lastSeenCreatedDisplayText: STATE.topItem.createdDisplayText || "",
+      lastEvaluatedRefreshId: 0,
+      requester: STATE.topItem.requester || "",
+      title: STATE.topItem.title || ""
+    };
+    saveWatchState(store);
+    showAlert("Watching top HIT for " + STATE.settings.watchDelay);
+    rerank();
+  }
+
+  function applyWatchSuppression(item, store, refreshId) {
+    const key = watchKeyForItem(item);
+    if (!key) {
+      return { ...item, watchSuppressed: false, watchReleasedByRefresh: false };
+    }
+
+    const now = Date.now();
+    const entry = store[key];
+    if (!entry) {
+      return { ...item, watchSuppressed: false, watchReleasedByRefresh: false };
+    }
+
+    if (!entry.until || entry.until <= now) {
+      delete store[key];
+      return { ...item, watchSuppressed: false, watchReleasedByRefresh: false };
+    }
+
+    if (entry.lastEvaluatedRefreshId === refreshId) {
+      return {
+        ...item,
+        watchSuppressed: true,
+        filteredOut: item.filteredOut || true,
+        hidden: true
+      };
+    }
+
+    const currentAgeSeconds = currentAgeSecondsForItem(item);
+    const currentDirection = createdDirectionForItem(item);
+    const baselineDirection = String(entry.baselineCreatedDirection || "unknown").toLowerCase();
+    const lastSeenDirection = String(entry.lastSeenCreatedDirection || baselineDirection || "unknown").toLowerCase();
+    let refreshed = false;
+
+    if (baselineDirection === "future") {
+      if (lastSeenDirection === "future" && currentDirection === "past") {
+        refreshed = true;
+      }
+    } else {
+      if (currentDirection === "future") {
+        refreshed = true;
+      }
+
+      if (!refreshed && entry.lastSeenCreationTime && item.creationTime) {
+        const lastSeenMs = Date.parse(entry.lastSeenCreationTime);
+        const currentMs = Date.parse(item.creationTime);
+        if (!Number.isNaN(lastSeenMs) && !Number.isNaN(currentMs) && currentMs > lastSeenMs + 1000) {
+          refreshed = true;
+        }
+      }
+
+      if (!refreshed && Number.isFinite(Number(entry.lastSeenAgeSeconds)) && Number.isFinite(currentAgeSeconds)) {
+        const elapsedSeconds = Math.max(0, (now - Number(entry.lastSeenAt || now)) / 1000);
+        const expectedAgeSeconds = Number(entry.lastSeenAgeSeconds) + elapsedSeconds;
+        const toleranceSeconds = refreshToleranceSeconds(currentAgeSeconds);
+        if (currentAgeSeconds + toleranceSeconds < expectedAgeSeconds) {
+          refreshed = true;
+        }
+      }
+    }
+
+    if (refreshed) {
+      delete store[key];
+      return { ...item, watchSuppressed: false, watchReleasedByRefresh: true };
+    }
+
+    entry.lastSeenAt = now;
+    entry.lastSeenAgeSeconds = Number.isFinite(currentAgeSeconds) ? currentAgeSeconds : null;
+    entry.lastSeenCreationTime = item.creationTime || "";
+    entry.lastSeenCreatedDirection = currentDirection;
+    entry.lastSeenCreatedDisplayText = item.createdDisplayText || "";
+    entry.lastEvaluatedRefreshId = refreshId;
+    store[key] = entry;
+
+    return {
+      ...item,
+      watchSuppressed: true,
+      filteredOut: item.filteredOut || true,
+      hidden: true
+    };
   }
 
   function pruneGhostState(state) {
@@ -462,6 +806,46 @@
     }
 
     return null;
+  }
+
+  function extractCreatedInfo(raw, row) {
+    const rawCandidates = [
+      raw && raw.created_since_text,
+      raw && raw.creation_time_text,
+      raw && raw.created_text,
+      raw && raw.creationTimeText
+    ];
+
+    for (const candidate of rawCandidates) {
+      const info = parseCreatedTimingInfo(candidate);
+      if (info.direction !== "unknown" && info.seconds != null) {
+        return info;
+      }
+    }
+
+    if (raw && raw.creation_time) {
+      const createdMs = Date.parse(raw.creation_time);
+      if (!Number.isNaN(createdMs)) {
+        return {
+          direction: "past",
+          seconds: Math.max(0, (Date.now() - createdMs) / 1000),
+          text: raw.creation_time
+        };
+      }
+    }
+
+    if (row) {
+      const desktopCreatedCell = row instanceof HTMLElement ? row.querySelector(":scope > .desktop-row > .created-column") : null;
+      const cells = rowCells(row);
+      const createdCell = desktopCreatedCell || cells[4] || null;
+      const createdText = textOf(createdCell || "");
+      const info = parseCreatedTimingInfo(createdText);
+      if (info.direction !== "unknown" && info.seconds != null) {
+        return info;
+      }
+    }
+
+    return { direction: "unknown", seconds: null, text: "" };
   }
 
   function applyGhostSuppression(item) {
@@ -510,12 +894,22 @@
     };
   }
 
-  function hiddenByPattern(title) {
+  function hiddenEntryForItem(item) {
+    return "group:" + normalize(item.requester + "|" + item.title);
+  }
+
+  function hiddenByPattern(title, item) {
     const patterns = STATE.settings.hiddenHitPatterns || [];
     const value = normalize(title);
+    const groupKey = item ? hiddenEntryForItem(item) : "";
     return patterns.some((pattern) => {
-      try { return new RegExp(pattern, "i").test(value); }
-      catch (err) { return value.includes(normalize(pattern)); }
+      const normalizedPattern = String(pattern || "").trim();
+      if (!normalizedPattern) return false;
+      if (normalizedPattern.startsWith("group:")) {
+        return !!groupKey && normalize(normalizedPattern) === groupKey;
+      }
+      try { return new RegExp(normalizedPattern, "i").test(value); }
+      catch (err) { return value.includes(normalize(normalizedPattern)); }
     });
   }
 
@@ -531,7 +925,7 @@
 
   function scoreItem(item) {
     const blocked = !!STATE.settings.blockedRequesters[item.requesterId] || !!STATE.settings.blockedRequesters[normalize(item.requester)];
-    const hidden = hiddenByPattern(item.title);
+    const hidden = hiddenByPattern(item.title, item);
     const manuallyExcluded = excludedOpportunity(item);
     const notes = STATE.settings.requesterNotes[item.requesterId] || STATE.settings.requesterNotes[normalize(item.requester)] || {};
     const noteScore = Number(notes.score || 0);
@@ -543,15 +937,11 @@
     score += Math.max(0, Math.min(noteScore, 25));
     score += Math.max(0, Math.min(noteSpeed, 15));
 
-    let ageSeconds = null;
-    if (item.creationTime) {
-      const createdMs = Date.parse(item.creationTime);
-      if (!Number.isNaN(createdMs)) {
-        ageSeconds = Math.max(0, (Date.now() - createdMs) / 1000);
-        const boostWindowSeconds = 3600;
-        if (ageSeconds < boostWindowSeconds) {
-          score += ((boostWindowSeconds - ageSeconds) / boostWindowSeconds) * 10;
-        }
+    let ageSeconds = currentAgeSecondsForItem(item);
+    if (ageSeconds != null) {
+      const boostWindowSeconds = 3600;
+      if (ageSeconds < boostWindowSeconds) {
+        score += ((boostWindowSeconds - ageSeconds) / boostWindowSeconds) * 10;
       }
     }
 
@@ -591,9 +981,9 @@
   }
 
   function clearDecorations() {
-    document.querySelectorAll(".mhh-pill,.mhh-badge,.mhh-pill-host").forEach((el) => el.remove());
-    document.querySelectorAll(".mhh-hidden,.mhh-top,.mhh-good,.mhh-ok,.mhh-bad").forEach((el) => {
-      el.classList.remove("mhh-hidden", "mhh-top", "mhh-good", "mhh-ok", "mhh-bad");
+    document.querySelectorAll(".mhh-pill,.mhh-badge,.mhh-debug-tag").forEach((el) => el.remove());
+    document.querySelectorAll(".mhh-hidden,.mhh-top,.mhh-good,.mhh-ok,.mhh-bad,.mhh-debug-outline").forEach((el) => {
+      el.classList.remove("mhh-hidden", "mhh-top", "mhh-good", "mhh-ok", "mhh-bad", "mhh-debug-outline");
     });
     document.querySelectorAll('[data-mhh-row-styled="1"]').forEach((el) => {
       el.style.removeProperty("background");
@@ -603,11 +993,23 @@
       el.style.removeProperty("position");
       el.removeAttribute("data-mhh-row-styled");
     });
+    document.querySelectorAll('.mhh-pill-host').forEach((el) => {
+      el.remove();
+    });
     clearDebugDecorations();
   }
 
   function rowCells(row) {
-    return Array.from(row.querySelectorAll("td, th")).filter((el) => el instanceof HTMLElement);
+    const tableCells = Array.from(row.querySelectorAll(":scope > td, :scope > th")).filter((el) => el instanceof HTMLElement);
+    if (tableCells.length) return tableCells;
+
+    const desktopRow = row.querySelector(":scope > .desktop-row");
+    if (desktopRow instanceof HTMLElement) {
+      const desktopCells = Array.from(desktopRow.querySelectorAll(":scope > .column")).filter((el) => el instanceof HTMLElement);
+      if (desktopCells.length) return desktopCells;
+    }
+
+    return [];
   }
 
   function applyRowVisuals(row, toneClass, isTop) {
@@ -617,8 +1019,15 @@
       "mhh-bad": "rgba(239,68,68,0.10)"
     };
     const background = isTop ? toneMap["mhh-good"] : (toneClass ? toneMap[toneClass] : "");
-    const targets = [row, ...rowCells(row)];
-    targets.forEach((el) => {
+    const containerTargets = [row];
+
+    const desktopRow = row.querySelector(":scope > .desktop-row");
+    if (desktopRow instanceof HTMLElement) containerTargets.push(desktopRow);
+
+    const mobileRow = row.querySelector(":scope > .mobile-row");
+    if (mobileRow instanceof HTMLElement) containerTargets.push(mobileRow);
+
+    containerTargets.forEach((el) => {
       el.setAttribute("data-mhh-row-styled", "1");
       if (background) {
         el.style.setProperty("background", background, "important");
@@ -627,6 +1036,7 @@
         el.style.setProperty("box-shadow", "inset 0 0 0 2px #22c55e", "important");
       }
     });
+
     row.setAttribute("data-mhh-row-styled", "1");
     row.style.setProperty("position", "relative", "important");
     if (isTop) {
@@ -635,48 +1045,113 @@
     }
   }
 
-  function pillHostForRow(row, anchor) {
-    const firstCell = rowCells(row)[0] || row;
-    let host = firstCell.querySelector(":scope > .mhh-pill-host");
-    if (!host) {
-      host = document.createElement("div");
-      host.className = "mhh-pill-host";
-      host.style.setProperty("display", "flex", "important");
-      host.style.setProperty("flex-wrap", "wrap", "important");
-      host.style.setProperty("gap", "6px", "important");
-      host.style.setProperty("align-items", "center", "important");
-      host.style.setProperty("margin", "4px 0 0 0", "important");
+  function pillCellForRow(row, item) {
+    if (row instanceof HTMLElement) {
+      const desktopTitleCell = row.querySelector(":scope > .desktop-row > .project-name-column");
+      if (desktopTitleCell instanceof HTMLElement) return desktopTitleCell;
+    }
 
-      if (anchor && anchor !== row && anchor.parentElement) {
-        anchor.insertAdjacentElement("afterend", host);
-      } else if (firstCell.firstChild) {
-        firstCell.insertBefore(host, firstCell.firstChild);
+    const cells = rowCells(row);
+    if (!cells.length) return row;
+    return cells[1] || cells[2] || row;
+  }
+
+  function pillAnchorForRow(row, item, cell) {
+    const anchor = findBestAnchor(row, item && item.title ? item.title : "");
+    if (!(anchor instanceof HTMLElement)) return null;
+    if (cell instanceof HTMLElement && cell.contains(anchor)) return anchor;
+    return null;
+  }
+
+  function pillHostForRow(row, item) {
+    const cell = pillCellForRow(row, item);
+    const itemKey = getStableItemKey(item);
+
+    Array.from(row.querySelectorAll('.mhh-pill-host')).forEach((host) => {
+      if (!(host instanceof HTMLElement)) return;
+      if (host.getAttribute('data-mhh-item-key') !== itemKey) return;
+      if (host.parentElement !== cell) {
+        host.remove();
+      }
+    });
+
+    let host = cell.querySelector('.mhh-pill-host[data-mhh-item-key="' + itemKey + '"]');
+    const anchor = pillAnchorForRow(row, item, cell);
+
+    if (!host) {
+      host = document.createElement("span");
+      host.className = "mhh-pill-host";
+      host.setAttribute('data-mhh-pill-host', '1');
+      host.setAttribute('data-mhh-item-key', itemKey);
+    }
+
+    host.style.setProperty("display", "inline-flex", "important");
+    host.style.setProperty("flex-wrap", "wrap", "important");
+    host.style.setProperty("gap", "6px", "important");
+    host.style.setProperty("align-items", "center", "important");
+    host.style.setProperty("justify-content", "flex-start", "important");
+    host.style.setProperty("margin", "0 0 0 8px", "important");
+    host.style.setProperty("width", "auto", "important");
+    host.style.setProperty("max-width", "100%", "important");
+    host.style.setProperty("box-sizing", "border-box", "important");
+    host.style.setProperty("vertical-align", "middle", "important");
+
+    if (host.parentElement !== cell) {
+      if (anchor && anchor.parentNode === cell && anchor.nextSibling) {
+        cell.insertBefore(host, anchor.nextSibling);
+      } else if (anchor && anchor.parentNode === cell) {
+        cell.appendChild(host);
       } else {
-        firstCell.appendChild(host);
+        cell.appendChild(host);
+      }
+    } else if (anchor && anchor.parentNode === cell && host.previousSibling !== anchor) {
+      if (anchor.nextSibling) {
+        cell.insertBefore(host, anchor.nextSibling);
+      } else {
+        cell.appendChild(host);
       }
     }
+
+    while (host.firstChild) host.removeChild(host.firstChild);
     return host;
   }
 
   function decorate(item, isTop) {
     const row = item.row;
     if (!row) return;
-    if (item.hidden || item.blocked) {
+    if (shouldHideRow(item)) {
       row.classList.add("mhh-hidden");
       return;
     }
+
     const toneClass = classFor(item);
     if (toneClass) row.classList.add(toneClass);
     if (isTop) row.classList.add("mhh-top");
     applyRowVisuals(row, toneClass, isTop);
 
     const anchor = findBestAnchor(row, item.title) || row;
-    const host = pillHostForRow(row, anchor);
+    const host = pillHostForRow(row, item);
 
-    if (item.manuallyExcluded || item.filteredOut || isTop) {
+    const pillText = item.manuallyExcluded
+      ? "Excluded from top"
+      : (item.watchSuppressed
+        ? "Watch delay"
+        : (item.lowCountGhostSuppressed
+          ? "Ghost-suppressed"
+          : (item.lowCountFiltered
+            ? "Low HIT count"
+            : (item.blocked
+              ? "Blocked requester"
+              : (item.tooOld
+                ? "Older than max age"
+                : (item.hidden
+                  ? "Hidden by list"
+                  : (item.filteredOut ? "Below requirements" : ("Score " + item.score))))))));
+
+    if (pillText) {
       const pill = document.createElement("span");
       pill.className = "mhh-pill";
-      pill.textContent = item.manuallyExcluded ? "Excluded from top" : (item.lowCountGhostSuppressed ? "Ghost-suppressed" : (item.lowCountFiltered ? "Low HIT count" : (item.filteredOut ? "Below requirements" : ("Score " + item.score))));
+      pill.textContent = pillText;
       host.appendChild(pill);
     }
 
@@ -700,18 +1175,34 @@
   function findBestAnchor(row, titleText) {
     if (!row) return null;
     const titleNorm = normalize(titleText || "");
-    const candidates = Array.from(row.querySelectorAll("a, span, div, strong, p"));
-    const matched = candidates.filter((el) => {
-      const t = normalize(textOf(el));
-      return t && titleNorm && t.includes(titleNorm);
-    });
-    if (matched.length) {
-      matched.sort((a, b) => textOf(a).length - textOf(b).length);
-      return matched[0];
+    const titleCell = pillCellForRow(row, null);
+
+    if (!(titleCell instanceof HTMLElement)) return row instanceof HTMLElement ? row : null;
+
+    const directTextSpan = titleCell.querySelector(":scope > a, :scope > span, :scope > strong");
+    if (directTextSpan instanceof HTMLElement) {
+      const directText = normalize(textOf(directTextSpan));
+      if (!titleNorm || (directText && directText.includes(titleNorm))) {
+        return directTextSpan;
+      }
     }
 
-    const generic = row.querySelector("a, strong, span, div, p");
-    return generic || row;
+    const candidates = Array.from(titleCell.querySelectorAll(":scope > a, :scope > span, :scope > strong, :scope > p, :scope > div, a, span, strong, p, div")).filter((el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (!titleCell.contains(el)) return false;
+      const t = normalize(textOf(el));
+      if (!t) return false;
+      if (titleNorm && !t.includes(titleNorm)) return false;
+      if (el.children.length > 3 && titleNorm && t.length > titleNorm.length + 40) return false;
+      return true;
+    });
+
+    if (candidates.length) {
+      candidates.sort((a, b) => textOf(a).length - textOf(b).length);
+      return candidates[0];
+    }
+
+    return titleCell;
   }
 
   function collectItems() {
@@ -727,6 +1218,7 @@
       log("No hydrated DOM nodes available yet", { bodyData: data.bodyData.length });
     }
 
+    const baseItems = [];
     const items = [];
     const debugRows = [];
     const usedRows = new Set();
@@ -753,6 +1245,7 @@
       }
 
       const control = acceptControlFromRow(bestRow);
+      const createdInfo = extractCreatedInfo(raw, bestRow);
       const scoredBase = scoreItem({
         id: normalize([(raw.requester_name || ""), (raw.title || ""), String(raw.monetary_reward?.amount_in_dollars || 0)].join("|")),
         hitSetId: raw.hit_set_id,
@@ -763,34 +1256,51 @@
         hitCount: extractHitCount(raw, bestRow),
         approvalRate: approvalRateForItem(raw),
         creationTime: raw.creation_time || "",
+        createdAgeSeconds: createdInfo.seconds,
+        createdDirection: createdInfo.direction,
+        createdDisplayText: createdInfo.text,
         row: bestRow,
         control,
         acceptUrl: raw.accept_project_task_url || "",
-        debugIndex: i
+        debugIndex: i,
+        debugMatchScore: bestScore
       });
-      const scored = applyGhostSuppression(scoredBase);
+      baseItems.push(scoredBase);
+    }
+
+    const watchStore = pruneWatchState(loadWatchState());
+    const refreshId = currentWatchRefreshId(baseItems);
+
+    for (const baseItem of baseItems) {
+      const watched = applyWatchSuppression(baseItem, watchStore, refreshId);
+      const scored = applyGhostSuppression(watched);
       items.push(scored);
 
-      const anchor = findBestAnchor(bestRow, scored.title);
+      const anchor = findBestAnchor(baseItem.row, scored.title);
       const info = anchorInfo(anchor);
       debugRows.push({
-        index: i,
+        index: baseItem.debugIndex,
         requester: scored.requester,
         title: scored.title,
         score: scored.score,
-        matchScore: bestScore,
+        matchScore: baseItem.debugMatchScore,
         filteredOut: scored.filteredOut,
         manuallyExcluded: scored.manuallyExcluded,
-        hasRow: !!bestRow,
-        hasControl: !!control,
+        hasRow: !!baseItem.row,
+        hasControl: !!baseItem.control,
         hitCount: scored.hitCount,
         ghostLowSeenCount: scored.ghostLowSeenCount,
         lowCountFiltered: scored.lowCountFiltered,
         lowCountGhostSuppressed: scored.lowCountGhostSuppressed,
+        watchSuppressed: scored.watchSuppressed,
+        watchReleasedByRefresh: scored.watchReleasedByRefresh,
+        createdAgeSeconds: scored.createdAgeSeconds,
         anchorTag: info.anchorTag,
         anchorText: info.anchorText
       });
     }
+
+    saveWatchState(watchStore);
 
     items.sort((a, b) => b.score - a.score);
     STATE.debugRows = debugRows;
@@ -811,52 +1321,69 @@
 
 
   async function rerank() {
-    if (!STATE.settings.enabled) {
+    if (STATE.rerankInFlight) {
+      STATE.rerankQueued = true;
+      return;
+    }
+
+    STATE.rerankInFlight = true;
+    try {
+      if (!STATE.settings.enabled) {
+        clearDecorations();
+        STATE.topItem = null;
+        showStatus("MTurk HIT Helper is off");
+        stopCountdown();
+        return;
+      }
+
+      if (!onHitsSearchPage()) {
+        clearDecorations();
+        STATE.topItem = null;
+        showStatus("MTurk HIT Helper idle on this page");
+        stopCountdown();
+        return;
+      }
+
+      ensureToolbar();
+      const rowsReady = await waitForRows(3000);
+      log("Rows ready", rowsReady);
       clearDecorations();
-      STATE.topItem = null;
-      showStatus("MTurk HIT Helper is off");
-      stopCountdown();
-      return;
-    }
+      const items = collectItems();
+      STATE.items = items;
 
-    if (!onHitsSearchPage()) {
-      clearDecorations();
-      STATE.topItem = null;
-      showStatus("MTurk HIT Helper idle on this page");
-      stopCountdown();
-      return;
-    }
+      const visible = items.filter((item) => !item.filteredOut && !item.hidden && !item.blocked);
+      const renderedCount = items.filter((item) => !shouldHideRow(item)).length;
+      const hiddenCount = Math.max(0, items.length - renderedCount);
+      const candidates = visible.filter((item) => !item.manuallyExcluded);
+      STATE.topItem = candidates.length ? candidates[0] : null;
 
-    const rowsReady = await waitForRows(3000);
-    log("Rows ready", rowsReady);
-    clearDecorations();
-    const items = collectItems();
-    STATE.items = items;
+      items.forEach((item) => decorate(item, STATE.topItem && STATE.topItem.id === item.id));
 
-    const visible = items.filter((item) => !item.filteredOut && !item.hidden && !item.blocked);
-    const candidates = visible.filter((item) => !item.manuallyExcluded);
-    STATE.topItem = candidates.length ? candidates[0] : null;
+      if (!items.length) {
+        showStatus("No HIT data found");
+        return;
+      }
+      if (!visible.length) {
+        showStatus(renderedCount === items.length ? ("Showing all " + items.length + " rows • no eligible top HIT") : ("Found " + items.length + " rows, all filtered out"));
+        return;
+      }
+      if (!STATE.topItem) {
+        showStatus("Watching " + visible.length + " visible HITs • no eligible top HIT" + (hiddenCount > 0 ? (" • " + hiddenCount + " hidden") : ""));
+        return;
+      }
+      showStatus("Watching " + visible.length + " visible HITs" + (hiddenCount > 0 ? (" • " + hiddenCount + " hidden") : "") + " • top = " + STATE.topItem.title);
 
-    items.forEach((item) => decorate(item, STATE.topItem && STATE.topItem.id === item.id));
-
-    if (!items.length) {
-      showStatus("No HIT data found");
-      return;
-    }
-    if (!visible.length) {
-      showStatus("Found " + items.length + " rows, all filtered out");
-      return;
-    }
-    if (!STATE.topItem) {
-      showStatus("Watching " + visible.length + " visible HITs • no eligible top HIT");
-      return;
-    }
-    showStatus("Watching " + visible.length + " visible HITs • top = " + STATE.topItem.title);
-
-    if (STATE.topItem && STATE.lastAlertId !== STATE.topItem.id) {
-      STATE.lastAlertId = STATE.topItem.id;
-      showAlert("Top HIT: " + STATE.topItem.title + " • $" + STATE.topItem.reward.toFixed(2));
-      beep();
+      if (STATE.topItem && STATE.lastAlertId !== STATE.topItem.id) {
+        STATE.lastAlertId = STATE.topItem.id;
+        showAlert("Top HIT: " + STATE.topItem.title + " • $" + STATE.topItem.reward.toFixed(2));
+        beep();
+      }
+    } finally {
+      STATE.rerankInFlight = false;
+      if (STATE.rerankQueued) {
+        STATE.rerankQueued = false;
+        window.setTimeout(rerank, 0);
+      }
     }
   }
 
@@ -886,8 +1413,10 @@
   function patchSettings(patch, callback) {
     chrome.runtime.sendMessage({ type: "PATCH_SETTINGS", payload: patch }, (response) => {
       STATE.settings = (response && response.settings) ? response.settings : { ...STATE.settings, ...patch };
+      ensureToolbar();
       showCountdown(refreshCountdownText());
       updateAudioButtonLabel();
+      updateHideToggleLabel();
       if (callback) callback();
     });
   }
@@ -901,7 +1430,9 @@
 
   function hideTopTitle() {
     if (!STATE.topItem) return;
-    const next = [...(STATE.settings.hiddenHitPatterns || []), STATE.topItem.title];
+    const hiddenEntry = hiddenEntryForItem(STATE.topItem);
+    const next = [...(STATE.settings.hiddenHitPatterns || [])];
+    if (!next.includes(hiddenEntry)) next.push(hiddenEntry);
     patchSettings({ hiddenHitPatterns: next }, rerank);
   }
 
@@ -973,10 +1504,57 @@
     } else if (key === "x") {
       event.preventDefault();
       excludeTopOpportunity();
+    } else if (key === "w") {
+      event.preventDefault();
+      addTopItemToWatchList();
     } else if (key === "r") {
       event.preventDefault();
       rerank();
     }
+  }
+
+
+
+  function scheduleMutationRerank() {
+    if (STATE.mutationRerankTimer) clearTimeout(STATE.mutationRerankTimer);
+    STATE.mutationRerankTimer = setTimeout(() => {
+      STATE.mutationRerankTimer = null;
+      rerank();
+    }, 150);
+  }
+
+  function ensureMutationObserver() {
+    if (STATE.mutationObserver || !document.body) return;
+    STATE.mutationObserver = new MutationObserver((mutations) => {
+      if (!onHitsSearchPage()) return;
+      for (const mutation of mutations || []) {
+        let relevant = false;
+
+        if (mutation.type === 'childList') {
+          const nodes = [...Array.from(mutation.addedNodes || []), ...Array.from(mutation.removedNodes || [])];
+          relevant = nodes.some((node) => {
+            if (!(node instanceof HTMLElement)) return false;
+            if (node.closest?.('.mhh-pill-host, #mhh-toolbar, #mhh-alert')) return false;
+            if (node.matches?.('tr, tbody, table, td, [role="row"]')) return true;
+            if (node.querySelector?.('tr, tbody, table, td, [role="row"]')) return true;
+            return false;
+          });
+        } else if (mutation.type === 'characterData') {
+          const parent = mutation.target && mutation.target.parentElement;
+          if (parent && parent.closest && parent.closest('.mhh-pill-host, #mhh-toolbar, #mhh-alert')) {
+            relevant = false;
+          } else {
+            relevant = !!(parent && parent.closest && parent.closest('tr, [role="row"]'));
+          }
+        }
+
+        if (relevant) {
+          scheduleMutationRerank();
+          break;
+        }
+      }
+    });
+    STATE.mutationObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
   }
 
 
@@ -992,6 +1570,16 @@
       sendResponse({ ok: true });
       return true;
     }
+    if (message.type === "GET_WATCH_LIST") {
+      sendResponse({ ok: true, entries: listWatchEntries() });
+      return true;
+    }
+    if (message.type === "REMOVE_WATCH_ITEMS") {
+      const result = removeWatchItems(Array.isArray(message.keys) ? message.keys : []);
+      rerank();
+      sendResponse(result);
+      return true;
+    }
   });
 
   function loadSettings() {
@@ -1003,16 +1591,21 @@
   async function init() {
     ensureStyle();
     STATE.settings = await loadSettings();
+    ensureToolbar();
     ensureBox(IDS.status);
     ensureBox(IDS.alert);
     const countdown = ensureBox(IDS.countdown);
     countdown.onclick = toggleRefreshEnabled;
+    const hideToggle = ensureBox(IDS.hideToggle, "button");
+    hideToggle.onclick = toggleRevealHiddenRows;
+    updateHideToggleLabel(hideToggle);
     showCountdown(refreshCountdownText());
     armAudioButton();
     window.addEventListener("keydown", keyHandler, true);
     rerank();
     scheduleScan();
     scheduleRefresh();
+    ensureMutationObserver();
     log("Initialized");
   }
 

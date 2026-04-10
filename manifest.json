@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MTurk HIT Helper Stable",
-  "version": "0.3.38",
+  "version": "0.3.51",
   "description": "Highlights the best visible MTurk HIT and accepts it with Z.",
   "permissions": [
     "storage",

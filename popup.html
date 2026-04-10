@@ -31,6 +31,7 @@
     <div class="checkbox"><input id="enabled" type="checkbox"><label for="enabled">Extension enabled</label></div>
     <div class="checkbox"><input id="refreshEnabled" type="checkbox"><label for="refreshEnabled">Auto-refresh via visible refresh control</label></div>
     <div class="checkbox"><input id="audioEnabled" type="checkbox"><label for="audioEnabled">Audio alerts</label></div>
+    <div class="checkbox"><input id="revealHiddenRows" type="checkbox"><label for="revealHiddenRows">Show rows normally hidden on page</label></div>
     <div class="checkbox"><input id="debugMode" type="checkbox"><label for="debugMode">Debug overlay mode</label></div>
   </div>
 
@@ -75,7 +76,24 @@
       <label for="ghostSuppressMinutes">Suppress low-count group for minutes</label>
       <input id="ghostSuppressMinutes" type="number" min="1" max="1440" step="1">
     </div>
+    <div>
+      <label for="watchDelay">Watch delay</label>
+      <input id="watchDelay" type="text" placeholder='e.g. 30s or 2m'>
+    </div>
   </div>
+
+
+  <div class="section">
+    <div class="row">
+      <div>
+        <label for="watchList">Watch list</label>
+        <select id="watchList" multiple></select>
+      </div>
+      <button id="removeWatch" class="btn secondary" title="Remove selected watch-list entries">−</button>
+    </div>
+    <div class="hint">These stay out of the table until the watch delay expires or Created appears to refresh.</div>
+  </div>
+
 
   <div class="section">
     <div class="row">
@@ -122,7 +140,7 @@
   <button id="save" class="btn">Save</button>
 
   <div class="footer">
-    Keys on the MTurk page: <code>Z</code> accept top HIT, <code>B</code> block top requester, <code>H</code> hide top title, <code>X</code> exclude top opportunity without hiding it, <code>R</code> rerank.
+    Keys on the MTurk page: <code>Z</code> accept top HIT, <code>B</code> block top requester, <code>H</code> hide top title, <code>X</code> exclude top opportunity without hiding it, <code>W</code> watch-delay the top HIT, <code>R</code> rerank.
   </div>
 
   <script src="popup.js"></script>

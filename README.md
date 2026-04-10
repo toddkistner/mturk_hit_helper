@@ -1,4 +1,4 @@
-# MTurk HIT Helper Stable v0.3.38
+# MTurk HIT Helper Stable v0.3.51
 
 This build reads MTurk's React data directly from the HitSetTable `data-react-props` payload instead of relying on fragile button discovery in the rendered DOM.
 
@@ -14,6 +14,33 @@ This build reads MTurk's React data directly from the HitSetTable `data-react-pr
 - Hotkey for accepting the top visible HIT is `Z`
 - Hidden entries are removed from view
 - Excluded entries remain visible but never become the preferred top item unless every visible item is excluded
+
+## Changes in 0.3.51
+
+- Fixed row highlighting so MTurk React `li` rows are shaded and bordered uniformly at the row/container level instead of styling each individual column span
+
+## Changes in 0.3.50
+
+- Restored row-pill mounting to a stable first-cell/title-anchor placement after 0.3.46 moved pills into a table cell that could disappear or fail to render on MTurk
+- Restored per-row score/status pills so each visible HIT group shows a pill again instead of only the current top HIT
+- Ignored helper-owned mutation events so pill insertion does not immediately retrigger unnecessary rerank loops
+
+## Changes in 0.3.45
+
+- Added a new hide/show-hidden pill so you can temporarily reveal rows normally hidden by filtering, watch suppression, age limits, requester blocks, or manual hide lists, then rehide them with one click
+- Moved the on-page helper pills out of the fixed upper-right stack into a centered horizontal toolbar mounted above the HIT results table for a more stable layout
+
+## Changes in 0.3.43
+
+- Made watch-list evaluation stateful and edge-triggered instead of re-evaluating repeatedly on identical row-mapping passes
+- Added per-HIT watch state for last seen Created age/direction and a snapshot-based refresh ID so each watched HIT is evaluated only once per material refresh snapshot
+- Updated release detection to compare against the last observed Created timing progression, preventing repeated same-snapshot checks from prematurely releasing or re-processing watched HITs
+
+## Changes in 0.3.42
+
+- Updated watch-list release logic to understand future Created values like `in 26s` versus active values like `26s ago`
+- If a watched item was added while inactive (`in Xs`), it now releases as soon as the Created value flips to active (`Xs ago`)
+- If a watched item was added while already active (`Xs ago`), it now stays hidden until the Created value flips back to future or the age clearly resets to a newer HIT
 
 ## Changes in 0.3.15
 
@@ -89,3 +116,24 @@ This build reads MTurk's React data directly from the HitSetTable `data-react-pr
 - Made the on-page audio alert button persist its enabled state across refreshes and reflect that saved preference
 - Changed Blocked requesters in the popup to a removable multiselect list like Hidden opportunities
 
+## Changes in 0.3.38
+
+- Added a loose title-normalization fallback in scoreHydratedMatch() so rows still match when the DOM title differs only by punctuation or spacing.
+
+## Changes in 0.3.40
+
+- Added a configurable Watch delay and `W` hotkey to temporarily hide the current top-ranked HIT group.
+- Watch-listed HIT groups automatically reappear early if their Created time refreshes instead of continuing to age normally.
+- Added time-aware Created-age parsing so watch detection compares elapsed age instead of matching literal strings.
+
+
+## Changes in 0.3.41
+
+- Added a Watch list multiselect to the popup so current watch-delayed HIT groups are visible there.
+- Added a minus button for the Watch list so selected watch entries can be manually removed like hidden and excluded entries.
+- Popup watch-list removal now updates the page immediately by removing those entries from session watch state and reranking.
+
+
+## v0.3.45
+- Made HIT-group pills idempotent and resilient to row replacement by reusing/rebuilding pill hosts and reapplying decoration after DOM mutations.
+- Added duplicate-safe `H` hiding keyed to a specific requester/title HIT-group identifier instead of blindly appending the same title repeatedly.

@@ -7,6 +7,23 @@ async function sendToActiveTab(message) {
   });
 }
 
+async function getWatchList() {
+  const response = await sendToActiveTab({ type: "GET_WATCH_LIST" });
+  return Array.isArray(response && response.entries) ? response.entries : [];
+}
+
+async function removeWatchListEntries(keys) {
+  return sendToActiveTab({ type: "REMOVE_WATCH_ITEMS", keys: keys || [] });
+}
+
+function formatWatchEntry(entry) {
+  const key = String(entry && entry.key ? entry.key : "").trim();
+  const requester = String(entry && entry.requester ? entry.requester : "").trim();
+  const title = String(entry && entry.title ? entry.title : "").trim();
+  const baselineAgeSeconds = Number(entry && entry.baselineAgeSeconds);
+  const ageLabel = Number.isFinite(baselineAgeSeconds) ? (" • " + Math.max(0, Math.round(baselineAgeSeconds)) + "s") : "";
+  return [key, requester, title].filter(Boolean).join(" | ") + ageLabel;
+}
 
 function lines(text) {
   return String(text || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
@@ -94,6 +111,7 @@ function saveSettings(payload) {
   setValue("enabled", settings.enabled ?? true);
   setValue("refreshEnabled", settings.refreshEnabled ?? false);
   setValue("audioEnabled", settings.audioEnabled ?? true);
+  setValue("revealHiddenRows", settings.revealHiddenRows ?? false);
   setValue("debugMode", settings.debugMode ?? false);
   setValue("mode", settings.mode || "best");
   setValue("minReward", settings.minReward ?? 0);
@@ -104,10 +122,19 @@ function saveSettings(payload) {
   setValue("minVisibleHitCount", settings.minVisibleHitCount ?? 2);
   setValue("ghostSuppressAfterSeen", settings.ghostSuppressAfterSeen ?? 2);
   setValue("ghostSuppressMinutes", settings.ghostSuppressMinutes ?? 10);
+  setValue("watchDelay", settings.watchDelay || "2m");
   fillMultiSelect("blockedRequesters", Object.entries(settings.blockedRequesters || {}).map(([k, v]) => `${k}|${v}`));
   setValue("requesterNotes", stringifyNotes(settings.requesterNotes || {}));
   fillMultiSelect("hiddenHitPatterns", settings.hiddenHitPatterns || []);
   fillMultiSelect("excludedOpportunities", settings.excludedOpportunities || []);
+  fillMultiSelect("watchList", (await getWatchList()).map(formatWatchEntry));
+
+  document.getElementById("removeWatch").addEventListener("click", async () => {
+    const selected = Array.from(document.getElementById("watchList").selectedOptions).map((opt) => opt.value);
+    const keys = selected.map((value) => String(value).split(" | ")[0].trim()).filter(Boolean);
+    await removeWatchListEntries(keys);
+    fillMultiSelect("watchList", (await getWatchList()).map(formatWatchEntry));
+  });
 
   document.getElementById("removeBlocked").addEventListener("click", () => removeSelected("blockedRequesters"));
   document.getElementById("removeHidden").addEventListener("click", () => removeSelected("hiddenHitPatterns"));
@@ -126,6 +153,7 @@ function saveSettings(payload) {
       enabled: !!getValue("enabled"),
       refreshEnabled: !!getValue("refreshEnabled"),
       audioEnabled: !!getValue("audioEnabled"),
+      revealHiddenRows: !!getValue("revealHiddenRows"),
       debugMode: !!getValue("debugMode"),
       mode: getValue("mode"),
       minReward: Number(getValue("minReward")) || 0,
@@ -136,6 +164,7 @@ function saveSettings(payload) {
       minVisibleHitCount: Math.max(0, Number(getValue("minVisibleHitCount")) || 0),
       ghostSuppressAfterSeen: Math.max(1, Number(getValue("ghostSuppressAfterSeen")) || 2),
       ghostSuppressMinutes: Math.max(1, Number(getValue("ghostSuppressMinutes")) || 10),
+      watchDelay: String(getValue("watchDelay") || "").trim(),
       blockedRequesters: parseBlocked(getMultiValues("blockedRequesters").join("\n")),
       hiddenHitPatterns: getMultiValues("hiddenHitPatterns"),
       requesterNotes: parseNotes(getValue("requesterNotes")),
